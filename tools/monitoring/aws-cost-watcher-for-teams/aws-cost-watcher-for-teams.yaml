@@ -228,7 +228,7 @@ Resources:
                     {%
                       "AWSアカウントID: " & $AccountId & " (" & $Project & "/" & $Environment & ")"
                       & "\n"
-                      & $states.input.CostSum > $AngryThreshold ? 🚨 : ✅
+                      & ( $states.input.CostSum > $AngryThreshold ? "🚨" : "✅" )
                       & "直近 1週間のコストは "
                       & $string($states.input.CostSum)
                       & " USD です。"
@@ -244,7 +244,7 @@ Resources:
                       & "\n:four: "  & ( $states.input.CostSorted[3].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[3].Total & " USD"
                       & "\n:five: "  & ( $states.input.CostSorted[4].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[4].Total & " USD"
                       & "\n"
-                      & ※ コスト反映にはタイムラグがあるため、最新ではない可能性があります。
+                      & "※ コスト反映にはタイムラグがあるため、最新ではない可能性があります。"
                     %}
               TopicArn: !Ref SNSTopic
             End: true
