@@ -1,0 +1,290 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Post AWS costs to Teams channel"
+Parameters:
+  Project:
+    Type: String
+    Default: "sample"
+  Env:
+    Type: String
+    Default: "dev"
+  NameSuffix:
+    Type: String
+    Default: "aws-cost-watcher"
+  TeamId:
+    Type: String
+    Description: ""
+    AllowedPattern: ^[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$
+  TeamsChannelID:
+    Type: String
+    Description: "An example of the channel ID syntax is: 19%3ab6ef35dc342d56ba5654e6fc6d25a071%40thread.tacv2."
+    AllowedPattern: ^([a-zA-Z0-9-_=+/.,])*%3[aA]([a-zA-Z0-9-_=+/.,])*%40([a-zA-Z0-9-_=+/.,])*$
+  TeamsTenantId:
+    Type: String
+    Description: ""
+    AllowedPattern: ^[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$
+  AngryThreshold:
+    Type: Number
+    Default: 150
+    Description: "Specify the weekly cost threshold in USD"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Environment Configuration"
+        Parameters:
+          - Project
+          - Env
+          - NameSuffix
+      - Label:
+          default: "Teams Configurations"
+        Parameters:
+          - TeamId
+          - TeamsTenantId
+          - TeamsChannelID
+      - Label:
+          default: "Threshold for becoming a notification"
+        Parameters:
+          - AngryThreshold
+
+Resources:
+  ### SNSトピック
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${Project}-${Env}-${NameSuffix}
+
+  ### Q Developer(Chatbot)
+  ChatbotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Project}-${Env}-${NameSuffix}-chatbot
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "chatbot.amazonaws.com"
+      Policies:
+        - PolicyName: AWS-Chatbot-NotificationsOnly-Policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "cloudwatch:Describe*"
+                  - "cloudwatch:Get*"
+                  - "cloudwatch:List*"
+                Effect: "Allow"
+                Resource: "*"
+  ChatbotConfiguration:
+    Type: AWS::Chatbot::MicrosoftTeamsChannelConfiguration
+    Properties:
+      ConfigurationName: !Sub ${Project}-${Env}-${NameSuffix}
+      IamRoleArn: !GetAtt ChatbotRole.Arn
+      LoggingLevel: NONE
+      TeamId: !Ref TeamId
+      TeamsChannelId: !Ref TeamsChannelID
+      TeamsTenantId: !Ref TeamsTenantId
+      SnsTopicArns:
+        - !Ref SNSTopic
+
+  ### Step Functions
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Project}-${Env}-${NameSuffix}-sfn
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "states.amazonaws.com"
+      Policies:
+        - PolicyName: SFnPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "xray:PutTraceSegments"
+                  - "xray:PutTelemetryRecords"
+                  - "xray:GetSamplingRules"
+                  - "xray:GetSamplingTargets"
+                Effect: "Allow"
+                Resource: "*"
+              - Action:
+                  - "ce:GetCostAndUsage"
+                Effect: "Allow"
+                Resource: "*"
+              - Action:
+                  - "sns:Publish"
+                Effect: "Allow"
+                Resource: !Ref SNSTopic
+  StepFunctionsStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub ${Project}-${Env}-${NameSuffix}-sfn
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      Definition:
+        Comment: A description of my state machine
+        QueryLanguage: JSONata
+        StartAt: GetCostAndUsage
+        States:
+          GetCostAndUsage:
+            Type: Task
+            Arguments:
+              Granularity: MONTHLY
+              Metrics:
+                - UnblendedCost
+              TimePeriod:
+                Start: |-
+                  {%
+                    /* 7日前の日付(YYYY-MM-DD)を持ってくる */
+                    ($millis() - 86400000 * 7) ~> $fromMillis('[Y0001]-[M01]-[D01]')
+                  %}
+                End: |-
+                  {%
+                    /* 今日の日付(YYYY-MM-DD)を持ってくる */
+                    /* ※CEの最新コスト反映にはラグがあることに注意 */
+                    $millis() ~> $fromMillis('[Y0001]-[M01]-[D01]')
+                  %}
+              GroupBy:
+                - Key: SERVICE
+                  Type: DIMENSION
+              Filter:
+                Not:
+                  Dimensions:
+                    Key: SERVICE
+                    Values:
+                      - Tax
+            Resource: arn:aws:states:::aws-sdk:costexplorer:getCostAndUsage
+            Output:
+              Start: |-
+                {%
+                  $states.result.ResultsByTime[0].TimePeriod.Start
+                %}
+              End: |-
+                {%
+                  $states.result.ResultsByTime[0].TimePeriod.End
+                %}
+              CostSum: |-
+                {%
+                  /* 全グループアイテムのコストを取得して、合計を求める */
+                  $states.result.ResultsByTime[].Groups[].Metrics.UnblendedCost.Amount.$number()
+                  ~> $sum() ~> $round(1)
+                %}
+              CostSorted: |-
+                {% (
+                  /* 全グループアイテムの「サービスとコストのペア」を取得 */
+                  $all_entries := $map(
+                    $zip(
+                      $states.result.ResultsByTime[].Groups[].Keys[0],
+                      $states.result.ResultsByTime[].Groups[].Metrics.UnblendedCost.Amount.$number()
+                    ),
+                    function($v) { {"Service": $v[0], "Amount": $v[1]} }
+                  );
+        
+                  /* サービス名の重複を排除したリストを作っておく */
+                  $services := $all_entries.Service ~> $distinct();
+        
+                  /* サービス名ごとのコストを計算する */
+                  $cost_per_service := $map(
+                    $services,
+                    function($s){
+                      {
+                        "Service": $s,
+                        "Total": $all_entries[Service=$s].Amount ~> $sum() ~> $round(1)
+                      }
+                    }
+                  );
+        
+                  /* 降順でソート */
+                  $sort($cost_per_service, function($l, $r){ $l.Total < $r.Total });
+                ) %}
+            Assign:
+              AngryThreshold: !Ref AngryThreshold
+              AccountId: !Ref AWS::AccountId
+              Project: !Ref Project
+              Environment: !Ref Env
+            Next: SNS Publish
+          SNS Publish:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Arguments:
+              Message:
+                version: '1.0'
+                source: custom
+                content:
+                  textType: client-markdown
+                  title: |-
+                    {%
+                      /* コスト合計がしきい値を超えたら「お怒りメッセージ」にする */
+                      $states.input.CostSum > $AngryThreshold ?
+                        "❌🤬 コスト監視くんはお怒りです"
+                        : "✅😄 コスト監視くんは平常心を保っています"
+                    %}
+                  description: |-
+                    {%
+                      "AWSアカウントID: " & $AccountId & " (" & $Project & "/" & $Environment & ")"
+                      & "\n"
+                      & $states.input.CostSum > $AngryThreshold ? 🚨 : ✅
+                      & "直近 1週間のコストは "
+                      & $string($states.input.CostSum)
+                      & " USD です。"
+                      & "\n"
+                      & "👁‍🗨1週間あたりのコスト閾値: " & $AngryThreshold & " USD"
+                      & "📅集計期間: " & $states.input.Start & " ～ " & $states.input.End
+                      & "\n"
+                      & "💸コスト使用量上位５位サービス" 
+                      & "\n"
+                      & "\n:one: "   & ( $states.input.CostSorted[0].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[0].Total & " USD"
+                      & "\n:two: "   & ( $states.input.CostSorted[1].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[1].Total & " USD"
+                      & "\n:three: " & ( $states.input.CostSorted[2].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[2].Total & " USD"
+                      & "\n:four: "  & ( $states.input.CostSorted[3].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[3].Total & " USD"
+                      & "\n:five: "  & ( $states.input.CostSorted[4].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[4].Total & " USD"
+                      & "\n"
+                      & ※ コスト反映にはタイムラグがあるため、最新ではない可能性があります。
+                    %}
+              TopicArn: !Ref SNSTopic
+            End: true
+
+  ### Scheduler
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Project}-${Env}-${NameSuffix}-scheduler
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - scheduler.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: StartExecution
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "states:StartExecution"
+                Resource:
+                  - !Ref StepFunctionsStateMachine
+  Schedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub ${Project}-${Env}-${NameSuffix}
+      Description: "Post AWS costs to Slack channel"
+      ScheduleExpression: "cron(00 10 * * ? *)"
+      ScheduleExpressionTimezone: "Japan"
+      FlexibleTimeWindow:
+        Mode: FLEXIBLE
+        MaximumWindowInMinutes: 1
+      State: ENABLED
+      Target:
+        Arn: !Ref StepFunctionsStateMachine
+        RoleArn: !GetAtt SchedulerRole.Arn
