@@ -15,6 +15,7 @@ Microsoft TeamsチャンネルにAWSの週次コストサマリーを自動投�
 ## アーキテクチャ
 
 この解決策は以下のAWSサービスを使用します：
+
 - **AWS Step Functions**: コスト監視ワークフローのオーケストレーション
 - **AWS Cost Explorer API**: コストと使用量データの取得
 - **AWS Chatbot**: Microsoft Teams連携
@@ -31,33 +32,28 @@ Microsoft TeamsチャンネルにAWSの週次コストサマリーを自動投�
 
 この解決策をデプロイするには、以下のMicrosoft Teams情報が必要です：
 
-### 1. Team ID
+### 1. Team ID、Channel ID、Tenant ID
+
 1. Microsoft Teamsを開く
 2. 対象のチームに移動
 3. チーム名の横の三点リーダー（...）をクリック
 4. "チームへのリンクを取得"を選択
-5. URLからTeam ID（GUID形式）を抽出
+5. URLからTeam ID、Channel ID、Tenant IDを抽出
 
-### 2. Teams Tenant ID
-1. Azure Portalにアクセス
-2. Azure Active Directoryに移動
-3. 概要ページからTenant IDをコピー
-
-### 3. Teams Channel ID
-1. Microsoft Teamsを開く
-2. 特定のチャンネルに移動
-3. チャンネル名の横の三点リーダー（...）をクリック
-4. "チャンネルへのリンクを取得"を選択
-5. URLからChannel ID（URLエンコード形式）を抽出
+```text
+https://teams.microsoft.com/l/channel/<Channel ID>/xxxx?groupId=<Team ID>&tenantId=<Tenant ID>
+```
 
 ## デプロイ
 
-1. ツールディレクトリに移動：
+1. ツールディレクトリに移動
+
 ```bash
 cd tools/monitoring/aws-cost-watcher
 ```
 
-2. CloudFormationスタックをデプロイ：
+2. CloudFormationスタックをデプロイ
+
 ```bash
 aws cloudformation deploy \
   --template-file aws-cost-watcher-for-teams.yaml \
@@ -89,6 +85,7 @@ aws cloudformation deploy \
 システムはコスト閾値に基づいて2種類のメッセージを送信します：
 
 ### 通常メッセージ（✅😄）
+
 コストが閾値以下の場合、以下の情報を含む穏やかな通知を受信します：
 - 今週の総コスト
 - コスト上位5サービス
@@ -96,6 +93,7 @@ aws cloudformation deploy \
 - コスト閾値情報
 
 ### 怒りメッセージ（❌🤬）
+
 コストが閾値を超えた場合、同じ情報を含む緊急通知を受信しますが、アラート絵文字と緊急メッセージングが付きます。
 
 ## カスタマイズ
@@ -103,35 +101,43 @@ aws cloudformation deploy \
 以下の要素をカスタマイズできます：
 
 ### スケジュール
-CloudFormationテンプレートの`ScheduleExpression`を変更：
+
+CloudFormationテンプレートの`ScheduleExpression`を変更
+
 ```yaml
 ScheduleExpression: "cron(00 10 * * ? *)"  # 毎日午前10時（JST）
 ```
 
 ### コスト閾値
+
 デプロイ時に`AngryThreshold`パラメータを調整するか、スタックを更新します。
 
 ### メッセージ形式
+
 メッセージ形式はJSONata式を使用してStep Functions定義で定義されています。`title`と`description`フィールドを変更して外観をカスタマイズできます。
 
 ## 監視とトラブルシューティング
 
 ### Step Functions実行の確認
+
 1. AWS Step Functionsコンソールにアクセス
 2. ステートマシンを探す：`{Project}-{Env}-aws-cost-watcher-sfn`
 3. 実行履歴とログを確認
 
 ### Chatbot設定の確認
+
 1. AWS Chatbotコンソールにアクセス
 2. Microsoft Teams設定を確認
 3. SNSトピックが適切に設定されていることを確認
 
 ### Cost Explorer権限
+
 Step Functions実行ロールに`ce:GetCostAndUsage`権限があることを確認してください。
 
 ## コスト考慮事項
 
-この解決策は最小限のコストを発生させます：
+この解決策は最小限のコストを発生させます。
+
 - Step Functions：1,000実行あたり約$0.025
 - SNS：100万通知あたり約$0.50
 - Cost Explorer API：リクエストあたり$0.01
@@ -140,7 +146,8 @@ Step Functions実行ロールに`ce:GetCostAndUsage`権限があることを確�
 
 ## セキュリティ
 
-この解決策はAWSセキュリティのベストプラクティスに従います：
+この解決策はAWSセキュリティのベストプラクティスに従います。
+
 - 最小限の必要権限を持つIAMロール
 - ハードコードされた認証情報なし
 - 暗号化されたSNSトピック（オプション、有効化可能）
