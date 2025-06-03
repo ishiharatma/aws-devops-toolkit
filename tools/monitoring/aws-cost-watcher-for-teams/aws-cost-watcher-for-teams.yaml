@@ -228,14 +228,21 @@ Resources:
                     {%
                       "AWSアカウントID: " & $AccountId & " (" & $Project & "/" & $Environment & ")"
                       & "\n"
-                      & 📅集計期間: " & $states.input.Start & " ～ " & $states.input.End
+                      & "📅集計期間: " & $states.input.Start & " ～ " & $states.input.End
                       & "\n"
                       & ( $states.input.CostSum > $AngryThreshold ? "🚨" : "✅" )
                       & "直近 1週間のコストは "
                       & $string($states.input.CostSum)
                       & " USD です。"
                       & "\n"
-                      & "👁‍🗨1週間あたりのコスト閾値: " & $AngryThreshold & " USD"
+                      & "👁‍🗨1週間あたりのコストしきい値: " & $AngryThreshold & " USD"
+                      & "\n"
+                      & ( $states.input.CostSum > $AngryThreshold ?
+                          "⚠️ コストがしきい値を超えています！"
+                          : "✅ コストはしきい値を下回っています。"
+                        )
+                      & "\n"
+                      & "----------------------"
                       & "\n"
                       & "💸コスト使用量上位５位サービス" 
                       & "\n"
