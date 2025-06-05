@@ -228,23 +228,18 @@ Resources:
                     {%
                       "AWSアカウントID: " & $AccountId & " (" & $Project & "/" & $Environment & ")"
                       & "\n"
-                      & "📅集計期間: " & $states.input.Start & " ～ " & $states.input.End
+                      & "集計期間: " & $states.input.Start & " ～ " & $states.input.End
                       & "\n"
-                      & ( $states.input.CostSum > $AngryThreshold ? "🚨" : "✅" )
                       & "直近 1週間のコストは "
                       & $string($states.input.CostSum)
                       & " USD です。"
+                      & "（" & ( $states.input.CostSum > $AngryThreshold ?
+                          "🚨 コストがしきい値[" & $AngryThreshold & " USD]を超えています！⚠️"
+                          : "✅ コストはしきい値[" & $AngryThreshold & " USD]を下回っています。"
+                        ) & "）"
                       & "\n"
-                      & "👁‍🗨1週間あたりのコストしきい値: " & $AngryThreshold & " USD"
                       & "\n"
-                      & ( $states.input.CostSum > $AngryThreshold ?
-                          "⚠️ コストがしきい値を超えています！"
-                          : "✅ コストはしきい値を下回っています。"
-                        )
-                      & "\n"
-                      & "----------------------"
-                      & "\n"
-                      & "💸コスト使用量上位５位サービス" 
+                      & "== 💸コスト使用量上位５位サービスの一覧です。=="
                       & "\n"
                       & "\n:one: "   & ( $states.input.CostSorted[0].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[0].Total & " USD"
                       & "\n:two: "   & ( $states.input.CostSorted[1].Service ~> $replace(/^(AWS|Amazon)\s*/,"") ) & ": " & $states.input.CostSorted[1].Total & " USD"
